@@ -46,6 +46,8 @@ cp config.json.example config.json
 | `save_dir` | Directory where `.aoe2record` files are saved (relative to script directory, or absolute) |
 | `known_profiles` | Map of player names to profile IDs. Used to prioritize which POV to download (matched by name or ID, case-insensitive) |
 
+Note: When using Porting Kit, the savegame directory will likely be something like `~/Applications/Age of Empires 2 Definitive Ed 3.app/Contents/SharedSupport/prefix/drive_c/users/Wineskin/Games/Age of Empires 2 DE/76561199709640163/savegame/`
+
 ## Usage
 
 ```bash
