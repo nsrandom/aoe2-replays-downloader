@@ -1,6 +1,6 @@
 # AoE2 Replay Downloader
 
-Download Age of Empires II game replays from [aoe2insights.com](https://www.aoe2insights.com) as `.aoe2record` files.
+Downloads Age of Empires II game replays from [aoe2insights.com](https://www.aoe2insights.com) as `.aoe2record` files.
 
 ## How It Works
 
@@ -56,8 +56,8 @@ The game ID can be found in the URL of any match page on aoe2insights.com:
 
 ```
 https://www.aoe2insights.com/match/318498344/
-                                  ^^^^^^^^^
-                                  game ID
+                                   ^^^^^^^^^
+                                   game ID
 ```
 
 ### Example
