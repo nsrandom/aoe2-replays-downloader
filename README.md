@@ -34,17 +34,17 @@ cp config.json.example config.json
 ```json
 {
   "save_dir": "./replays",
-  "known_profiles": [
-    "YourPlayerName",
-    "FriendName"
-  ]
+  "known_profiles": {
+    "YourPlayerName": "12345678",
+    "FriendName": "87654321"
+  }
 }
 ```
 
 | Key | Description |
 |-----|-------------|
 | `save_dir` | Directory where `.aoe2record` files are saved (relative to script directory, or absolute) |
-| `known_profiles` | Player names to prioritize when choosing which POV to download (case-insensitive) |
+| `known_profiles` | Map of player names to profile IDs. Used to prioritize which POV to download (matched by name or ID, case-insensitive) |
 
 ## Usage
 

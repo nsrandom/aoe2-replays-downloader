@@ -1,8 +1,8 @@
 {
   "save_dir": "./replays",
-  "known_profiles": [
-    "Bengal.Bhainse",
-    "WarWolf",
-    "harshdeep"
-  ]
+  "known_profiles": {
+    "Bengal.Bhainse": "19947811",
+    "WarWolf": "20073924",
+    "harshdeep": "20719476"
+  }
 }

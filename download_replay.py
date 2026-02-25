@@ -17,17 +17,39 @@ MATCH_URL = "https://www.aoe2insights.com/match/{game_id}/"
 
 def load_config():
     """Load configuration from config.json."""
+    if not os.path.exists(CONFIG_PATH):
+        print(f"Error: Config file not found at {CONFIG_PATH}")
+        print(f"Please create a config.json file. See config.json.example for reference.")
+        sys.exit(1)
+
     with open(CONFIG_PATH, "r") as f:
         config = json.load(f)
 
-    save_dir = config.get("save_dir", "./replays")
+    if "save_dir" not in config or not config["save_dir"]:
+        print("Error: 'save_dir' is required in config.json")
+        print('Example: {"save_dir": "./replays", ...}')
+        sys.exit(1)
+
+    save_dir = config["save_dir"]
     # Resolve relative paths against the script directory
     if not os.path.isabs(save_dir):
         save_dir = os.path.join(SCRIPT_DIR, save_dir)
 
+    if not os.path.isdir(save_dir):
+        answer = input(f"Save directory does not exist: {save_dir}\nCreate it? [y/N] ")
+        if answer.strip().lower() != "y":
+            print("Aborted.")
+            sys.exit(1)
+        os.makedirs(save_dir, exist_ok=True)
+        print(f"  ✓ Created directory: {save_dir}")
+
+    # known_profiles: {name: profileId} — lowercase the keys for matching
+    known_profiles = config.get("known_profiles", {})
+    known_profiles = {k.lower(): v for k, v in known_profiles.items()}
+
     return {
         "save_dir": save_dir,
-        "known_profiles": [p.lower() for p in config.get("known_profiles", [])],
+        "known_profiles": known_profiles,
     }
 
 
@@ -67,10 +89,19 @@ def fetch_savegame_links(game_id):
 
 def select_pov(savegames, known_profiles):
     """Select the POV of a known profile, or the first available player."""
+    # Build a set of known profile IDs for matching against download URLs
+    known_ids = {str(pid) for pid in known_profiles.values() if pid}
+
     for player_name, download_url in savegames:
+        # Match by player name
         if player_name.lower() in known_profiles:
             print(f"  ✓ Found known profile: {player_name}")
             return player_name, download_url
+        # Match by profile ID in the download URL
+        for name, pid in known_profiles.items():
+            if pid and f"profileId={pid}" in download_url:
+                print(f"  ✓ Found known profile by ID: {name} (profileId={pid})")
+                return player_name, download_url
 
     # No known profile found — pick the first available
     player_name, download_url = savegames[0]
@@ -91,8 +122,6 @@ def download_and_extract(download_url, save_dir):
         tmp_path = tmp.name
 
     try:
-        os.makedirs(save_dir, exist_ok=True)
-
         with zipfile.ZipFile(tmp_path, "r") as zf:
             record_files = [n for n in zf.namelist() if n.endswith(".aoe2record")]
             if not record_files:
