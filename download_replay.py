@@ -8,11 +8,19 @@ import tempfile
 import zipfile
 
 import requests
-from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 MATCH_URL = "https://www.aoe2insights.com/match/{game_id}/"
+REPLAY_URL = "https://aoe.ms/replay/?gameId={game_id}&profileId={profile_id}"
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+}
 
 
 def load_config():
@@ -54,35 +62,56 @@ def load_config():
 
 
 def fetch_savegame_links(game_id):
-    """Fetch the match page and extract (player_name, download_url) pairs."""
+    """Use Playwright to load the match page (bypassing Cloudflare) and
+    extract player data from the analysis JSON to build download URLs."""
     url = MATCH_URL.format(game_id=game_id)
     print(f"Fetching match page: {url}")
 
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        try:
+            page = browser.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+            title = page.title()
+            if "not found" in title.lower() or "#not found" in page.url:
+                print(f"  ✗ Match {game_id} not found on aoe2insights.com.")
+                return []
+
+            # Fetch the analysis JSON from within the authenticated page context
+            result = page.evaluate(
+                """async (gameId) => {
+                    const resp = await fetch(
+                        `/media/matches/analysis/analysis-${gameId}.json`
+                    );
+                    if (!resp.ok) return {error: resp.status};
+                    const data = await resp.json();
+                    return Object.values(data.player).map(p => ({
+                        name: p.name,
+                        profile_id: p.profile_id,
+                        type: p.type,
+                    }));
+                }""",
+                game_id,
+            )
+        finally:
+            browser.close()
+
+    if isinstance(result, dict) and "error" in result:
+        print(f"  ✗ Failed to fetch analysis data (HTTP {result['error']}).")
+        return []
 
     savegames = []
-    for li in soup.select("li.list-group-item"):
-        link = li.find("a", href=lambda h: h and "aoe.ms/replay" in h)
-        if not link:
+    for player in result:
+        if player.get("type") != "human":
             continue
-
-        download_url = link["href"]
-        # Remove the download link and color-slot span before extracting text
-        # so we get clean player name from "<name>'s Point of View"
-        li_copy = BeautifulSoup(str(li), "html.parser")
-        for tag in li_copy.find_all(["a", "span"]):
-            tag.decompose()
-        text = li_copy.get_text(strip=True)
-
-        if "'s Point of View" in text:
-            player_name = text.split("'s Point of View")[0].strip()
-        else:
-            player_name = "Unknown"
-
-        savegames.append((player_name, download_url))
+        name = player.get("name", "Unknown")
+        profile_id = player.get("profile_id")
+        download_url = REPLAY_URL.format(
+            game_id=game_id,
+            profile_id=profile_id if profile_id else "",
+        )
+        savegames.append((name, download_url))
 
     return savegames
 
@@ -113,7 +142,7 @@ def download_and_extract(download_url, save_dir):
     """Download the replay zip and extract .aoe2record files."""
     print(f"Downloading replay from: {download_url}")
 
-    resp = requests.get(download_url, timeout=60, allow_redirects=True)
+    resp = requests.get(download_url, headers=HEADERS, timeout=60, allow_redirects=True)
     resp.raise_for_status()
 
     # Save to a temp file
