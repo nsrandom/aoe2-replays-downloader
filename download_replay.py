@@ -13,7 +13,6 @@ from playwright.sync_api import sync_playwright
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "config.json")
 MATCH_URL = "https://www.aoe2insights.com/match/{game_id}/"
-REPLAY_URL = "https://aoe.ms/replay/?gameId={game_id}&profileId={profile_id}"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -49,9 +48,9 @@ def load_config():
             print("Aborted.")
             sys.exit(1)
         os.makedirs(save_dir, exist_ok=True)
-        print(f"  ✓ Created directory: {save_dir}")
+        print(f"  [ok] Created directory: {save_dir}")
 
-    # known_profiles: {name: profileId} — lowercase the keys for matching
+    # known_profiles: {name: profileId} -- lowercase the keys for matching
     known_profiles = config.get("known_profiles", {})
     known_profiles = {k.lower(): v for k, v in known_profiles.items()}
 
@@ -63,8 +62,8 @@ def load_config():
 
 def fetch_savegame_links(game_id):
     """Use Playwright to load the match page (bypassing Cloudflare) and
-    extract player data from the analysis JSON to build download URLs."""
-    url = MATCH_URL.format(game_id=game_id)
+    extract savegame download links directly from the #savegames tab."""
+    url = MATCH_URL.format(game_id=game_id) + "#savegames"
     print(f"Fetching match page: {url}")
 
     with sync_playwright() as p:
@@ -75,42 +74,63 @@ def fetch_savegame_links(game_id):
 
             title = page.title()
             if "not found" in title.lower() or "#not found" in page.url:
-                print(f"  ✗ Match {game_id} not found on aoe2insights.com.")
+                print(f"  [FAIL] Match {game_id} not found on aoe2insights.com.")
                 return []
 
-            # Fetch the analysis JSON from within the authenticated page context
+            # Click on the Savegames tab to ensure the section is rendered
+            try:
+                savegames_tab = page.locator('a[href*="#savegames"]').first
+                savegames_tab.click(timeout=5000)
+                page.wait_for_timeout(2000)  # Wait for tab content to render
+            except Exception:
+                pass  # Tab may already be active from the URL hash
+
+            # Wait for download links to appear
+            page.wait_for_selector('a[href*="aoe.ms/replay"]', timeout=15000)
+
+            # Extract player names and download URLs from the savegames section.
+            # The page structure pairs each player name with a Download link.
             result = page.evaluate(
-                """async (gameId) => {
-                    const resp = await fetch(
-                        `/media/matches/analysis/analysis-${gameId}.json`
-                    );
-                    if (!resp.ok) return {error: resp.status};
-                    const data = await resp.json();
-                    return Object.values(data.player).map(p => ({
-                        name: p.name,
-                        profile_id: p.profile_id,
-                        type: p.type,
-                    }));
-                }""",
-                game_id,
+                """() => {
+                    const links = document.querySelectorAll('a[href*="aoe.ms/replay"]');
+                    const savegames = [];
+                    for (const link of links) {
+                        const downloadUrl = link.href;
+                        // Walk backwards through previous siblings / parent to find
+                        // the player name link (links to /user/<id>/)
+                        let nameEl = null;
+                        let sibling = link.previousElementSibling;
+                        while (sibling) {
+                            if (sibling.tagName === 'A' && sibling.href && sibling.href.includes('/user/')) {
+                                nameEl = sibling;
+                                break;
+                            }
+                            sibling = sibling.previousElementSibling;
+                        }
+                        // Also check the parent container
+                        if (!nameEl) {
+                            const parent = link.closest('div, li, tr, td, section');
+                            if (parent) {
+                                nameEl = parent.querySelector('a[href*="/user/"]');
+                            }
+                        }
+                        const name = nameEl ? nameEl.textContent.trim() : 'Unknown';
+                        savegames.push({name, downloadUrl});
+                    }
+                    return savegames;
+                }"""
             )
         finally:
             browser.close()
 
-    if isinstance(result, dict) and "error" in result:
-        print(f"  ✗ Failed to fetch analysis data (HTTP {result['error']}).")
+    if not result:
+        print("  [FAIL] No savegame download links found on the page.")
         return []
 
     savegames = []
-    for player in result:
-        if player.get("type") != "human":
-            continue
-        name = player.get("name", "Unknown")
-        profile_id = player.get("profile_id")
-        download_url = REPLAY_URL.format(
-            game_id=game_id,
-            profile_id=profile_id if profile_id else "",
-        )
+    for entry in result:
+        name = entry.get("name", "Unknown")
+        download_url = entry.get("downloadUrl", "")
         savegames.append((name, download_url))
 
     return savegames
@@ -124,17 +144,17 @@ def select_pov(savegames, known_profiles):
     for player_name, download_url in savegames:
         # Match by player name
         if player_name.lower() in known_profiles:
-            print(f"  ✓ Found known profile: {player_name}")
+            print(f"  [ok] Found known profile: {player_name}")
             return player_name, download_url
         # Match by profile ID in the download URL
         for name, pid in known_profiles.items():
             if pid and f"profileId={pid}" in download_url:
-                print(f"  ✓ Found known profile by ID: {name} (profileId={pid})")
+                print(f"  [ok] Found known profile by ID: {name} (profileId={pid})")
                 return player_name, download_url
 
-    # No known profile found — pick the first available
+    # No known profile found -- pick the first available
     player_name, download_url = savegames[0]
-    print(f"  → No known profile found, using: {player_name}")
+    print(f"  -> No known profile found, using: {player_name}")
     return player_name, download_url
 
 
@@ -154,14 +174,14 @@ def download_and_extract(download_url, save_dir):
         with zipfile.ZipFile(tmp_path, "r") as zf:
             record_files = [n for n in zf.namelist() if n.endswith(".aoe2record")]
             if not record_files:
-                print("  ✗ No .aoe2record files found in the zip archive.")
+                print("  [FAIL] No .aoe2record files found in the zip archive.")
                 return None
 
             for name in record_files:
                 dest = os.path.join(save_dir, os.path.basename(name))
                 with zf.open(name) as src, open(dest, "wb") as dst:
                     dst.write(src.read())
-                print(f"  ✓ Extracted: {dest}")
+                print(f"  [ok] Extracted: {dest}")
 
             return dest
     finally:
@@ -184,7 +204,7 @@ def main():
 
     print(f"Found {len(savegames)} savegame(s):")
     for name, url in savegames:
-        print(f"  • {name}: {url}")
+        print(f"  - {name}: {url}")
 
     # Step 2: Select POV
     player_name, download_url = select_pov(savegames, config["known_profiles"])
